@@ -440,3 +440,36 @@ fn test_second_pending_submission_replaces_first() {
         "only the committed entry counts — the replaced pending write never went live"
     );
 }
+
+
+// ── #277: Regression test ensuring finalize_score_state has a single canonical
+// definition that executes all analytics pipelines. ─────────────────────────────
+
+#[test]
+fn test_finalize_score_state_updates_all_pipelines() {
+    let (env, client, _admin, _service) = setup();
+    client.set_finality_buffer(&Vec::new(&env), &60);
+
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+    submit(&env, &client, &wallet, &pair, 75);
+    advance_to(&env, START_TS + 60);
+    client.commit_pending_score(&wallet, &pair).unwrap();
+
+    // Score is live — canonical finalize_score_state writes to storage.
+    assert_eq!(client.get_score(&wallet, &pair).score, 75);
+
+    // Score count incremented — finalize_score_state calls increment_score_count.
+    assert_eq!(client.get_score_count(&wallet, &pair), 1);
+
+    // History has the entry — finalize_score_state calls push_score_history.
+    assert_eq!(client.get_score_history(&wallet, &pair).len(), 1);
+
+    // Historical max was updated — finalize_score_state calls update_historical_max_score.
+    assert_eq!(client.get_historical_max_score(&wallet, &pair), 75);
+
+    // Histogram was updated — finalize_score_state calls update_histogram_on_write.
+    let hist = client.get_score_histogram();
+    assert_eq!(hist.total, 1);
+    assert_eq!(hist.buckets.get(7).unwrap(), 1); // bucket 7 for score 75
+}
