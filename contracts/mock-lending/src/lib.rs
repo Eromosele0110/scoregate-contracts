@@ -47,6 +47,7 @@ pub enum MockLendingError {
     Unauthorized = 7,
     /// A gate threshold or confidence floor exceeds the valid 0-100 scale.
     InvalidThreshold = 8,
+    ContractPaused = 9,
 }
 
 #[contracttype]
@@ -64,6 +65,7 @@ enum DataKey {
     RequiredOracleVersion,
     ExpandedRiskScore,
     MaxBorrowAmount,
+    Paused,
 }
 
 #[contract]
@@ -122,7 +124,9 @@ impl MockLending {
         admin: Address,
         max_borrow_amount: i128,
     ) -> Result<(), MockLendingError> {
+        user.require_auth();
         Self::require_admin(&env, &admin)?;
+        if Self::is_paused(env.clone()) { return Err(MockLendingError::ContractPaused); }
         if max_borrow_amount <= 0 {
             return Err(MockLendingError::InvalidAmount);
         }
@@ -204,4 +208,58 @@ impl MockLending {
         let configured: Address =
             env.storage().instance().get(&DataKey::Admin).ok_or(Mo
 
-/* … truncated 3767 chars — edit only what you need near the top … */
+        let client = ScoreGateScoreContractClient::new(&env, &scoregate);
+        if required_oracle_version > 0 {
+            match client.try_get_contract_version() {
+                Ok(Ok(version)) if version >= required_oracle_version => {}
+                Ok(Ok(_)) => return Err(MockLendingError::UnsupportedVersion),
+                _ => return Self::allow_on_unavailable(fail_policy),
+            }
+        }
+        let is_safe = match client.try_query_risk_gate_with_confidence(
+            &user,
+            &asset_pair,
+            &gate_threshold,
+            &min_confidence,
+        ) {
+            Ok(Ok(v)) => v,
+            _ => return Self::allow_on_unavailable(fail_policy),
+        };
+        if !is_safe {
+            return Err(MockLendingError::RiskGateRejected);
+        }
+        // RiskScore expanded in contract version 5. Older deployments remain
+        // compatible through the stable confidence-gate surface, but their
+        // smaller score value cannot be decoded by the current generated client.
+        let expanded_score =
+            env.storage().instance().get(&DataKey::ExpandedRiskScore).unwrap_or(false);
+        if expanded_score {
+            if let Ok(Ok(score)) = client.try_get_score(&user, &asset_pair) {
+                if env.ledger().timestamp().saturating_sub(score.timestamp) > max_staleness_secs {
+                    return Err(MockLendingError::StaleScore);
+                }
+            }
+        }
+
+        events::borrow_executed(&env, &user, &asset_pair, amount);
+        Ok(())
+    }
+    pub fn pause(env: Env, admin: Address) {
+        admin.require_auth();
+        let stored: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored { return; }
+        env.storage().instance().set(&DataKey::Paused, &true);
+    }
+
+    pub fn unpause(env: Env, admin: Address) {
+        admin.require_auth();
+        let stored: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored { return; }
+        env.storage().instance().set(&DataKey::Paused, &false);
+    }
+
+    pub fn is_paused(env: Env) -> bool {
+        env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
+    }
+}
+

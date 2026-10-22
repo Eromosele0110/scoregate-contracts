@@ -842,5 +842,5 @@ Contributions are welcome. ScoreGate is an open-source public good built for the
 <!-- handsoff-issue-67 -->
 - #67: #17 — Revoke All Embargoes Panics in Single-Admin Mode
 
-<!-- handsoff-issue-270 -->
-- #270: Contract Pause and Unpause Events Lack Timestamp and Duration Diagnostic Payload
+<!-- handsoff-issue-284 -->
+- #284: add_admin_signer and remove_admin_signer Omit Event Emissions and Governance Audit Chain Records
