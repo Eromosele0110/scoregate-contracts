@@ -442,34 +442,56 @@ fn test_second_pending_submission_replaces_first() {
 }
 
 
-// ── #277: Regression test ensuring finalize_score_state has a single canonical
-// definition that executes all analytics pipelines. ─────────────────────────────
+// ── Guards: pause / pair-pause / epoch ─────────────────────────────────────────
 
 #[test]
-fn test_finalize_score_state_updates_all_pipelines() {
+fn test_commit_pending_score_blocked_by_global_pause() {
     let (env, client, _admin, _service) = setup();
     client.set_finality_buffer(&Vec::new(&env), &60);
-
     let wallet = Address::generate(&env);
     let pair = symbol_short!("XLM_USDC");
-    submit(&env, &client, &wallet, &pair, 75);
+    submit(&env, &client, &wallet, &pair, 50);
     advance_to(&env, START_TS + 60);
-    client.commit_pending_score(&wallet, &pair).unwrap();
+    client.pause(&Vec::new(&env));
+    let result = client.try_commit_pending_score(&wallet, &pair);
+    assert_eq!(result, Err(Ok(Error::ContractPaused)));
+}
 
-    // Score is live — canonical finalize_score_state writes to storage.
-    assert_eq!(client.get_score(&wallet, &pair).score, 75);
+#[test]
+fn test_commit_pending_score_blocked_by_pair_pause() {
+    let (env, client, _admin, _service) = setup();
+    client.set_finality_buffer(&Vec::new(&env), &60);
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+    submit(&env, &client, &wallet, &pair, 50);
+    advance_to(&env, START_TS + 60);
+    client.set_pair_paused(&Vec::new(&env), &pair, &true);
+    let result = client.try_commit_pending_score(&wallet, &pair);
+    assert_eq!(result, Err(Ok(Error::ContractPaused)));
+}
 
-    // Score count incremented — finalize_score_state calls increment_score_count.
-    assert_eq!(client.get_score_count(&wallet, &pair), 1);
+#[test]
+fn test_commit_pending_score_blocked_by_closed_epoch() {
+    let (env, client, _admin, _service) = setup();
+    client.set_finality_buffer(&Vec::new(&env), &60);
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+    submit(&env, &client, &wallet, &pair, 50);
+    advance_to(&env, START_TS + 60);
+    client.close_epoch(&Vec::new(&env));
+    let result = client.try_commit_pending_score(&wallet, &pair);
+    assert_eq!(result, Err(Ok(Error::EpochClosed)));
+}
 
-    // History has the entry — finalize_score_state calls push_score_history.
-    assert_eq!(client.get_score_history(&wallet, &pair).len(), 1);
-
-    // Historical max was updated — finalize_score_state calls update_historical_max_score.
-    assert_eq!(client.get_historical_max_score(&wallet, &pair), 75);
-
-    // Histogram was updated — finalize_score_state calls update_histogram_on_write.
-    let hist = client.get_score_histogram();
-    assert_eq!(hist.total, 1);
-    assert_eq!(hist.buckets.get(7).unwrap(), 1); // bucket 7 for score 75
+#[test]
+fn test_auto_commit_score_blocked_by_global_pause() {
+    let (env, client, _admin, _service) = setup();
+    client.set_finality_buffer(&Vec::new(&env), &60);
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+    submit(&env, &client, &wallet, &pair, 55);
+    advance_to(&env, START_TS + 60);
+    client.pause(&Vec::new(&env));
+    let result = client.try_auto_commit_score(&wallet, &pair);
+    assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }

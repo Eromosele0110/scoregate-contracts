@@ -886,6 +886,17 @@ impl ScoreGateScoreContract {
         asset_pair: Symbol,
     ) -> Result<(), Error> {
         Self::require_not_frozen(&env)?;
+
+        if storage::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
+        if storage::is_pair_paused(&env, &asset_pair) {
+            return Err(Error::ContractPaused);
+        }
+        if !storage::is_epoch_open(&env) {
+            return Err(Error::EpochClosed);
+        }
+
         let pending =
             storage::get_pending_score(&env, &wallet, &asset_pair).ok_or(Error::NoPendingScore)?;
 
